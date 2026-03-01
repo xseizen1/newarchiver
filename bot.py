@@ -220,43 +220,43 @@ def main():
     """Главная функция запуска"""
     # Инициализируем БД
     database.init_db()
-    
-    # Запускаем Flask в отдельном потоке
+
+    # Запускаем Flask в отдельном потоке для health checks Render
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    logger.info(f"Flask server started on port {PORT}")
-    
-    # Создаём глобальный объект bot и application для доступа из Flask
-    global bot, application
-    
+    logger.info(f"Flask server started on port {PORT} for health checks")
+
     # Создаём приложение Telegram
     application = Application.builder().token(TOKEN).build()
-    bot = application.bot
-    
+
     # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("my_id", my_id))
     application.add_handler(CommandHandler("add_user", add_user))
     application.add_handler(CommandHandler("remove_user", remove_user))
     application.add_handler(CommandHandler("list_users", list_users))
-    
+
     # Обработчик обычных сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Запускаем вебхук (асинхронно)
-    import asyncio
-    asyncio.run(setup_webhook(application))
-    
-    # Запускаем бота (start_polling не нужен, используем вебхук)
-    logger.info("Bot started. Waiting for updates via webhook...")
-    
-    # Держим главный поток активным
-    try:
-        while True:
-            import time
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Bot stopped")
+
+    # Запуск бота с вебхуками
+    if not WEBHOOK_URL:
+        logger.error("RENDER_EXTERNAL_URL не установлен! Переменная окружения обязательна.")
+        return
+
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    logger.info(f"Запуск бота с вебхуком: {webhook_url}")
+
+    # Запускаем бота в режиме вебхука (этот метод работает асинхронно и не блокирует поток)
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=webhook_url,
+        secret_token=None,  # Можно добавить секретный токен для безопасности
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True  # Удалить старые обновления, накопившиеся пока бот не работал
+    )
 
 if __name__ == "__main__":
     main()
