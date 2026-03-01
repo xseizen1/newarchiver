@@ -1,51 +1,62 @@
 import os
 import logging
-import asyncio
+import threading
+import sqlite3
 from typing import Optional, Dict, Any
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from flask import Flask, request
+from telegram import Update, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
     ContextTypes
 )
 
 import database
 
-# Настройка логирования
+# ============== НАСТРОЙКИ ==============
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Токен бота из переменных окружения
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("No BOT_TOKEN found in environment variables")
 
-# ID владельца (админа) — тоже из переменных
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+PORT = int(os.environ.get("PORT", 10000))  # Render даёт порт через переменную
+WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render даёт URL сервиса
 
-# Хранилище для одноразовых медиа (временно)
-temp_media: Dict[int, Dict[str, Any]] = {}
+# ============== FLASK-СЕРВЕР ДЛЯ HEALTH CHECKS ==============
+flask_app = Flask(__name__)
 
-async def auth_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[bool]:
-    """Декоратор для проверки авторизации"""
-    user = update.effective_user
-    if not user:
-        return False
-    
-    user_id = user.id
-    
-    # Владелец всегда авторизован
+@flask_app.route('/')
+@flask_app.route('/health')
+def health():
+    """Render пингует этот эндпоинт, чтобы сервис не засыпал"""
+    return "Bot is running", 200
+
+@flask_app.route('/webhook', methods=['POST'])
+def webhook():
+    """Telegram будет отправлять обновления сюда"""
+    update = Update.de_json(request.get_json(force=True), bot)
+    application.update_queue.put(update)
+    return "OK", 200
+
+def run_flask():
+    """Запускает Flask в отдельном потоке"""
+    flask_app.run(host='0.0.0.0', port=PORT)
+
+# ============== ФУНКЦИЯ ПРОВЕРКИ АВТОРИЗАЦИИ ==============
+async def is_authorized(user_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Проверяет, есть ли пользователь в белом списке"""
     if user_id == OWNER_ID:
         return True
     
-    # Проверка по базе
     if database.is_authorized(user_id):
         return True
     
@@ -58,36 +69,24 @@ async def auth_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Opti
     return False
 
 # ============== КОМАНДЫ УПРАВЛЕНИЯ ДОСТУПОМ ==============
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик /start"""
-    user = update.effective_user
-    
-    # Проверяем авторизацию
-    if not await auth_check(update, context):
+    if not await is_authorized(update.effective_user.id, update, context):
         return
     
     await update.message.reply_text(
-        f"👋 Привет, {user.first_name}!\n\n"
-        f"Я бот для отслеживания удалённых сообщений и одноразового медиа.\n\n"
-        f"📋 Доступные команды:\n"
-        f"/add_user [ID] — добавить пользователя в белый список (только для владельца)\n"
-        f"/remove_user [ID] — удалить пользователя из белого списка (только для владельца)\n"
-        f"/list_users — показать всех авторизованных пользователей (только для владельца)\n"
-        f"/my_id — показать ваш Telegram ID\n"
-        f"/help — показать эту справку"
+        f"👋 Привет, {update.effective_user.first_name}!\n\n"
+        f"Я бот для отслеживания удалённых сообщений.\n\n"
+        f"📋 Команды:\n"
+        f"/add_user [ID] — добавить пользователя (только владелец)\n"
+        f"/remove_user [ID] — удалить пользователя (только владелец)\n"
+        f"/list_users — список авторизованных (только владелец)\n"
+        f"/my_id — показать ваш Telegram ID"
     )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик /help"""
-    if not await auth_check(update, context):
-        return
-    
-    await start(update, context)
 
 async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает ID пользователя"""
-    if not await auth_check(update, context):
+    if not await is_authorized(update.effective_user.id, update, context):
         return
     
     user = update.effective_user
@@ -102,12 +101,10 @@ async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Добавляет пользователя в белый список (только для владельца)"""
     user = update.effective_user
     
-    # Только владелец может добавлять
     if user.id != OWNER_ID:
         await update.message.reply_text("⛔ Эта команда только для владельца бота.")
         return
     
-    # Проверяем аргументы
     if not context.args:
         await update.message.reply_text(
             "❌ Укажите ID пользователя.\n"
@@ -128,7 +125,6 @@ async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = "unknown"
             first_name = "unknown"
         
-        # Добавляем в БД
         if database.add_authorized_user(target_id, username, first_name, user.id):
             await update.message.reply_text(
                 f"✅ Пользователь `{target_id}` добавлен в белый список.",
@@ -191,40 +187,54 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='Markdown')
 
 # ============== ОСНОВНАЯ ЛОГИКА БОТА ==============
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает обычные сообщения"""
-    # Проверка авторизации
-    if not await auth_check(update, context):
+    if not await is_authorized(update.effective_user.id, update, context):
         return
     
-    # Здесь будет логика сохранения сообщений
-    # Пока просто логируем
+    # TODO: Здесь будет сохранение сообщений для отслеживания удалений
     logger.info(f"Message from {update.effective_user.id}: {update.message.text}")
 
-async def handle_deleted_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает удалённые сообщения"""
-    # Проверка авторизации
-    if not await auth_check(update, context):
+# ============== НАСТРОЙКА ВЕБХУКА ==============
+async def setup_webhook(application: Application):
+    """Устанавливает вебхук для бота"""
+    if not WEBHOOK_URL:
+        logger.error("RENDER_EXTERNAL_URL не установлен!")
         return
     
-    # TODO: Здесь будет логика отслеживания удалений
-    # Пока заглушка
-    logger.info("Deleted messages detected!")
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    
+    # Удаляем старый вебхук/поллинг
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    
+    # Устанавливаем новый вебхук
+    await application.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=Update.ALL_TYPES
+    )
+    
+    logger.info(f"Webhook установлен на {webhook_url}")
 
-# ============== ЗАПУСК БОТА ==============
-
+# ============== ЗАПУСК ==============
 def main():
-    """Запуск бота"""
+    """Главная функция запуска"""
     # Инициализируем БД
     database.init_db()
     
-    # Создаём приложение
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask server started on port {PORT}")
+    
+    # Создаём глобальный объект bot и application для доступа из Flask
+    global bot, application
+    
+    # Создаём приложение Telegram
     application = Application.builder().token(TOKEN).build()
+    bot = application.bot
     
     # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("my_id", my_id))
     application.add_handler(CommandHandler("add_user", add_user))
     application.add_handler(CommandHandler("remove_user", remove_user))
@@ -233,9 +243,20 @@ def main():
     # Обработчик обычных сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запускаем polling
-    logger.info("Bot started. Press Ctrl+C to stop.")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Запускаем вебхук (асинхронно)
+    import asyncio
+    asyncio.run(setup_webhook(application))
+    
+    # Запускаем бота (start_polling не нужен, используем вебхук)
+    logger.info("Bot started. Waiting for updates via webhook...")
+    
+    # Держим главный поток активным
+    try:
+        while True:
+            import time
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Bot stopped")
 
 if __name__ == "__main__":
     main()

@@ -1,13 +1,16 @@
 services:
-  - type: worker
+  - type: web  # Меняем с worker на web
     name: telegram-archiver
     runtime: python
-    region: frankfurt  # или другой регион
+    region: frankfurt
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
+    healthCheckPath: /health  # Render будет проверять этот путь
     envVars:
       - key: BOT_TOKEN
-        sync: false  # секретная переменная
+        sync: false
       - key: OWNER_ID
-        value: ТВОЙ_TELEGRAM_ID  # замени на свой ID
+        value: ТВОЙ_TELEGRAM_ID  # Замени на свой ID
+      - key: RENDER_EXTERNAL_URL
+        value: https://telegram-archiver.onrender.com  # Замени на свой URL после деплоя
