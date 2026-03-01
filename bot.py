@@ -1,15 +1,14 @@
 import os
 import logging
 import threading
-import asyncio
-from flask import Flask, request
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import database
 
 # ============== НАСТРОЙКИ ==============
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -20,9 +19,8 @@ if not TOKEN:
 
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 PORT = int(os.environ.get("PORT", 10000))
-WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
-# ============== FLASK ДЛЯ HEALTH CHECKS ==============
+# ============== FLASK ТОЛЬКО ДЛЯ HEALTH CHECKS ==============
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -36,7 +34,6 @@ def run_flask():
 
 # ============== ПРОВЕРКА АВТОРИЗАЦИИ ==============
 async def is_authorized(user_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Проверяет, есть ли пользователь в белом списке"""
     if user_id == OWNER_ID:
         return True
     
@@ -78,7 +75,6 @@ async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Добавляет пользователя в белый список (только для владельца)"""
     user = update.effective_user
     
     if user.id != OWNER_ID:
@@ -170,15 +166,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Message from {update.effective_user.id}: {update.message.text}")
 
-# ============== ОСНОВНАЯ ФУНКЦИЯ ==============
-def run_bot():
-    """Запускает бота в отдельном event loop"""
-    # Создаём новый event loop для этого потока
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    # Инициализация БД
-    database.init_db()
+# ============== ЗАПУСК ==============
+def main():
+    """Запуск бота"""
+    # Запуск Flask для health checks в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask server started on port {PORT} for health checks")
     
     # Создание приложения Telegram
     application = Application.builder().token(TOKEN).build()
@@ -191,34 +185,10 @@ def run_bot():
     application.add_handler(CommandHandler("list_users", list_users))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Настройка вебхука
-    if not WEBHOOK_URL:
-        logger.error("RENDER_EXTERNAL_URL не установлен!")
-        return
+    logger.info("Starting bot with polling...")
     
-    webhook_url = f"{WEBHOOK_URL}/webhook"
-    logger.info(f"Setting webhook to: {webhook_url}")
-    
-    # Запуск с вебхуками (используем loop.run_until_complete)
-    loop.run_until_complete(
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path="webhook",
-            webhook_url=webhook_url,
-            allowed_updates=Update.ALL_TYPES
-        )
-    )
-
-def main():
-    """Главная функция"""
-    # Запуск Flask для health checks в отдельном потоке
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info(f"Flask server started on port {PORT}")
-    
-    # Запуск бота в главном потоке
-    run_bot()
+    # Запуск с polling (вебхуки не нужны!)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
