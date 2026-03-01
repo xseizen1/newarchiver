@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: telegram-archiver
+    runtime: python
+    region: frankfurt  # или другой регион
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false  # секретная переменная
+      - key: OWNER_ID
+        value: ТВОЙ_TELEGRAM_ID  # замени на свой ID
