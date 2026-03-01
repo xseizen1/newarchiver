@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import asyncio
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -170,15 +171,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Message from {update.effective_user.id}: {update.message.text}")
 
 # ============== ОСНОВНАЯ ФУНКЦИЯ ==============
-def main():
-    """Запуск бота"""
+def run_bot():
+    """Запускает бота в отдельном event loop"""
+    # Создаём новый event loop для этого потока
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     # Инициализация БД
     database.init_db()
-    
-    # Запуск Flask для health checks
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info(f"Flask server started on port {PORT}")
     
     # Создание приложения Telegram
     application = Application.builder().token(TOKEN).build()
@@ -199,14 +199,26 @@ def main():
     webhook_url = f"{WEBHOOK_URL}/webhook"
     logger.info(f"Setting webhook to: {webhook_url}")
     
-    # Запуск с вебхуками
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path="webhook",
-        webhook_url=webhook_url,
-        allowed_updates=Update.ALL_TYPES
+    # Запуск с вебхуками (используем loop.run_until_complete)
+    loop.run_until_complete(
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path="webhook",
+            webhook_url=webhook_url,
+            allowed_updates=Update.ALL_TYPES
+        )
     )
+
+def main():
+    """Главная функция"""
+    # Запуск Flask для health checks в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask server started on port {PORT}")
+    
+    # Запуск бота в главном потоке
+    run_bot()
 
 if __name__ == "__main__":
     main()
