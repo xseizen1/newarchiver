@@ -8,7 +8,7 @@ import database
 
 # ============== НАСТРОЙКИ ==============
 logging.basicConfig(
-    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -187,7 +187,7 @@ def main():
     
     logger.info("Starting bot with polling...")
     
-    # Запуск с polling (вебхуки не нужны!)
+    # ЗАПУСК С POLLING (самая важная строка!)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
