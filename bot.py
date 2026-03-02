@@ -169,10 +169,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============== ЗАПУСК ==============
 def main():
     """Запуск бота"""
-    # Запуск Flask для health checks в отдельном потоке
+    # Инициализация БД - ЭТО ВАЖНО!
+    database.init_db()
+    
+    # Запуск Flask для health checks
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    logger.info(f"Flask server started on port {PORT} for health checks")
+    logger.info(f"✅ Flask server started on port {PORT}")
+    
+    # остальной код...
     
     # Создание приложения Telegram
     application = Application.builder().token(TOKEN).build()

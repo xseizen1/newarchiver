@@ -9,6 +9,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    # Таблица авторизованных пользователей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS authorized_users (
             user_id INTEGER PRIMARY KEY,
@@ -21,6 +22,7 @@ def init_db():
     
     conn.commit()
     conn.close()
+    print("✅ Database initialized")  # Временно для проверки
 
 def is_authorized(user_id: int) -> bool:
     conn = sqlite3.connect(DB_PATH)
@@ -42,7 +44,8 @@ def add_authorized_user(user_id: int, username: str, first_name: str, added_by: 
         success = cursor.rowcount > 0
         conn.close()
         return success
-    except Exception:
+    except Exception as e:
+        print(f"Error adding user: {e}")
         return False
 
 def remove_authorized_user(user_id: int) -> bool:
